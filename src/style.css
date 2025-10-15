@@ -1,0 +1,28 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #f7fafc;
+}
+
+.price-change {
+  transition: background-color 0.5s ease-out;
+}
+
+.price-up {
+  background-color: #10b981;
+  /* Green-500 */
+  color: white;
+  font-weight: 600;
+}
+
+.price-down {
+  background-color: #ef4444;
+  /* Red-500 */
+  color: white;
+  font-weight: 600;
+}
+
+.modal-overlay {
+  background-color: rgba(0, 0, 0, 0.5);
+}
