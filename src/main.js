@@ -1,14 +1,16 @@
-// Constants for CoinLore API
+// --- API Constants ---
 const COINLORE_API_URL = 'https://api.coinlore.net/api/tickers/?start=0&limit=100';
 const MAX_RETRIES = 5;
 const BASE_DELAY_MS = 500; // 0.5 seconds
+const AUTO_REFRESH_INTERVAL = 60000; // 1 minute
 
-// Global State
+// --- Global State ---
 let allCoins = [];
 let visibleCoins = [];
 let currentView = 'table';
+let searchTimeout;
 
-// --- Helper Functions ---
+// --- Utility Functions ---
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const formatCurrency = (value) => {
@@ -43,111 +45,134 @@ const showMessage = (message, type) => {
   messageArea.style.display = 'block';
 };
 
-// --- Data Management & Rendering ---
+// --- Rendering Functions ---
 const renderTable = (coins) => {
   const tableBody = document.getElementById('crypto-table-body');
-  let innerHTML = '';
   if (coins.length === 0) {
     tableBody.innerHTML = `<tr><td colspan="6" class="text-center py-8 text-gray-500">No matching cryptocurrencies found.</td></tr>`;
+    document.getElementById('card-container').innerHTML = '';
     return;
   }
-  coins.forEach((crypto) => {
+
+  tableBody.innerHTML = coins.map((crypto) => {
     const changeValue = parseFloat(crypto.percent_change_24h);
     const changeClass = changeValue > 0 ? 'text-green-600' : changeValue < 0 ? 'text-red-600' : 'text-gray-500';
-    innerHTML += `
-            <tr id="row-${crypto.id}" class="hover:bg-indigo-50 cursor-pointer transition duration-150" onclick="showCoinDetail('${crypto.id}')">
-                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${crypto.rank}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${crypto.name}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${crypto.symbol}</td>
-                <td id="price-${crypto.id}" class="px-6 py-4 whitespace-nowrap text-sm text-right font-semibold text-gray-900">${formatCurrency(crypto.price_usd)}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-500">${formatLargeNumber(crypto.market_cap_usd)}</td>
-                <td class="px-6 py-4 whitespace-nowrap text-sm text-right ${changeClass}">${changeValue.toFixed(2)}%</td>
-            </tr>
-        `;
-  });
-  tableBody.innerHTML = innerHTML;
+    return `
+      <tr id="row-${crypto.id}" class="hover:bg-indigo-50 cursor-pointer transition duration-150" onclick="showCoinDetail('${crypto.id}')">
+        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${crypto.rank}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${crypto.name}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${crypto.symbol}</td>
+        <td id="price-${crypto.id}" class="px-6 py-4 whitespace-nowrap text-sm text-right font-semibold text-gray-900">${formatCurrency(crypto.price_usd)}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-500">${formatLargeNumber(crypto.market_cap_usd)}</td>
+        <td class="px-6 py-4 whitespace-nowrap text-sm text-right ${changeClass}">${changeValue.toFixed(2)}%</td>
+      </tr>
+    `;
+  }).join('');
 
-  const cardContainer = document.getElementById('card-container');
-  let cardHTML = '';
-  coins.forEach((crypto) => {
-    cardHTML += `
-            <div class="max-w-sm rounded overflow-hidden shadow-lg bg-white mb-4">
-                <div class="px-6 py-4">
-                    <div class="font-bold text-xl mb-2">${crypto.name} (${crypto.symbol})</div>
-                    <p class="text-gray-700 text-base">Rank: ${crypto.rank}</p>
-                    <p class="text-gray-700 text-base">Price: ${formatCurrency(crypto.price_usd)}</p>
-                    <p class="text-gray-700 text-base">Market Cap: ${formatLargeNumber(crypto.market_cap_usd)}</p>
-                </div>
-            </div>
-        `;
-  });
-  cardContainer.innerHTML = cardHTML;
+  renderCards(coins);
 };
 
+const renderCards = (coins) => {
+  const cardContainer = document.getElementById('card-container');
+  cardContainer.innerHTML = coins.map((crypto) => {
+    const changeValue = parseFloat(crypto.percent_change_24h);
+    const changeClass = changeValue > 0 ? 'text-green-600' : changeValue < 0 ? 'text-red-600' : 'text-gray-500';
+    return `
+      <div class="max-w-xs bg-white rounded-xl overflow-hidden shadow-md hover:shadow-lg transform hover:scale-105 transition duration-300 m-2 cursor-pointer border border-gray-100"
+           onclick="showCoinDetail('${crypto.id}')">
+        <div class="p-6 flex flex-col justify-between h-full">
+          <div>
+            <div class="flex justify-between items-center mb-3">
+              <h2 class="font-bold text-lg text-gray-800">${crypto.name}</h2>
+              <span class="text-sm text-gray-400">${crypto.symbol}</span>
+            </div>
+            <p class="text-sm text-gray-500 mb-2">Rank: <span class="font-semibold">${crypto.rank}</span></p>
+            <p class="text-sm text-gray-700 mb-2">Price: <span class="font-semibold">${formatCurrency(crypto.price_usd)}</span></p>
+            <p class="text-sm text-gray-700 mb-2">Market Cap: <span class="font-semibold">${formatLargeNumber(crypto.market_cap_usd)}</span></p>
+            <p class="text-sm ${changeClass} font-semibold">24h: ${changeValue.toFixed(2)}%</p>
+          </div>
+          <button class="mt-4 w-full bg-indigo-600 text-white text-sm font-semibold py-2 px-3 rounded hover:bg-indigo-700 transition">View Details</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+};
+
+// --- Data Fetching ---
 const fetchAssets = async (attempt = 0) => {
   showMessage(`Loading top 100 cryptocurrencies (Attempt ${attempt + 1}/${MAX_RETRIES})...`, 'info');
   try {
     const response = await fetch(COINLORE_API_URL);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
     const result = await response.json();
     allCoins = result.data;
     visibleCoins = allCoins.slice(0, 100);
     renderTable(visibleCoins);
     document.getElementById('message-area').style.display = 'none';
   } catch (error) {
-    console.error(`Error fetching initial data on attempt ${attempt + 1}:`, error);
+    console.error(`Error fetching data on attempt ${attempt + 1}:`, error);
     if (attempt < MAX_RETRIES - 1) {
       const delay = BASE_DELAY_MS * Math.pow(2, attempt);
       await sleep(delay);
-      fetchAssets(attempt + 1);
+      await fetchAssets(attempt + 1); // ✅ FIXED: awaited recursive call
     } else {
-      showMessage(`Failed to load data after ${MAX_RETRIES}  attempts. Error: ${error.message}. Please refresh.`, 'error');
+      showMessage(`Failed to load data after ${MAX_RETRIES} attempts. Error: ${error.message}. Please refresh.`, 'error');
     }
   }
 };
 
+// --- Modal Functions ---
 const showCoinDetail = (coinId) => {
   const coin = allCoins.find(c => c.id === coinId);
   if (!coin) return;
+
   document.getElementById('modal-coin-name').textContent = `${coin.name} (${coin.symbol})`;
   document.getElementById('modal-coin-rank').textContent = coin.rank;
   document.getElementById('modal-coin-price').textContent = formatCurrency(coin.price_usd);
   document.getElementById('modal-coin-marketcap').textContent = formatLargeNumber(coin.market_cap_usd);
   document.getElementById('modal-coin-supply').textContent = formatLargeNumber(coin.circulating_supply);
+
   const changeValue = parseFloat(coin.percent_change_24h);
   const changeEl = document.getElementById('modal-coin-change');
   changeEl.textContent = `${changeValue.toFixed(2)}%`;
-  changeEl.classList.remove('text-green-600', 'text-red-600');
-  if (changeValue > 0) {
-    changeEl.classList.add('text-green-600');
-  } else if (changeValue < 0) {
-    changeEl.classList.add('text-red-600');
-  } else {
-    changeEl.classList.add('text-gray-600');
-  }
+  changeEl.className = changeValue > 0 ? 'text-green-600' : changeValue < 0 ? 'text-red-600' : 'text-gray-600';
+
   const modalOverlay = document.getElementById('detail-modal-overlay');
+  const modal = document.getElementById('detail-modal');
+
   modalOverlay.classList.remove('opacity-0', 'pointer-events-none');
   modalOverlay.classList.add('opacity-100');
-  document.getElementById('detail-modal').classList.remove('scale-95');
-  document.getElementById('detail-modal').classList.add('scale-100');
+  modal.classList.remove('scale-95');
+  modal.classList.add('scale-100');
 };
 
 const hideCoinDetail = () => {
   const modalOverlay = document.getElementById('detail-modal-overlay');
+  const modal = document.getElementById('detail-modal');
+
   modalOverlay.classList.remove('opacity-100');
-  modalOverlay.classList.add('opacity-0', 'pointer-events-none');
-  document.getElementById('detail-modal').classList.remove('scale-100');
-  document.getElementById('detail-modal').classList.add('scale-95');
+  modalOverlay.classList.add('opacity-0');
+  modal.classList.remove('scale-100');
+  modal.classList.add('scale-95');
+
+  // Smooth close delay
+  setTimeout(() => modalOverlay.classList.add('pointer-events-none'), 200);
 };
 
+// --- Search Function (with debounce) ---
 const handleSearch = (event) => {
-  const query = event.target.value.toLowerCase();
-  visibleCoins = allCoins.filter(coin => coin.name.toLowerCase().includes(query) || coin.symbol.toLowerCase().includes(query));
-  renderTable(visibleCoins);
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    const query = event.target.value.toLowerCase();
+    visibleCoins = allCoins.filter(
+      (coin) => coin.name.toLowerCase().includes(query) || coin.symbol.toLowerCase().includes(query)
+    );
+    renderTable(visibleCoins);
+  }, 300);
 };
 
+// --- View Toggle ---
 const toggleView = () => {
   const tableContainer = document.getElementById('table-container');
   const cardContainer = document.getElementById('card-container');
@@ -166,18 +191,17 @@ const toggleView = () => {
   }
 };
 
+// --- Initialization ---
 document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('search-input').addEventListener('input', handleSearch);
   document.getElementById('close-modal-btn').addEventListener('click', hideCoinDetail);
   document.getElementById('detail-modal-overlay').addEventListener('click', (e) => {
-    if (e.target.id === 'detail-modal-overlay') {
-      hideCoinDetail();
-    }
+    if (e.target.id === 'detail-modal-overlay') hideCoinDetail();
   });
   document.getElementById('toggle-view-button').addEventListener('click', toggleView);
   fetchAssets();
+  setInterval(fetchAssets, AUTO_REFRESH_INTERVAL); // Auto-refresh ✅
 });
-
 
 // import axios from 'axios';
 
