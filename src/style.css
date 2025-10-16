@@ -1,28 +1,71 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
-
+/* Custom CSS for a professional look and feel */
 body {
   font-family: 'Inter', sans-serif;
-  background-color: #f7fafc;
+  background-color: #f8fafc;
+  /* Light gray background */
 }
 
-.price-change {
-  transition: background-color 0.5s ease-out;
+/* 🔹 Card Glow */
+.card-glow:hover {
+  box-shadow: 0 0 20px rgba(99, 102, 241, 0.4);
+  /* Indigo glow */
 }
 
-.price-up {
-  background-color: #10b981;
-  /* Green-500 */
-  color: white;
-  font-weight: 600;
+/* 🔹 Price Change Pulse Animation */
+@keyframes pulse-green {
+  0% {
+    background-color: #f0fdf4;
+  }
+
+  50% {
+    background-color: #dcfce7;
+  }
+
+  100% {
+    background-color: #f0fdf4;
+  }
 }
 
-.price-down {
-  background-color: #ef4444;
-  /* Red-500 */
-  color: white;
-  font-weight: 600;
+@keyframes pulse-red {
+  0% {
+    background-color: #fff1f2;
+  }
+
+  50% {
+    background-color: #fee2e2;
+  }
+
+  100% {
+    background-color: #fff1f2;
+  }
 }
 
+.animate-price-up {
+  animation: pulse-green 1s ease-in-out;
+}
+
+.animate-price-down {
+  animation: pulse-red 1s ease-in-out;
+}
+
+/* 🔹 Modal Overlay */
 .modal-overlay {
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: rgba(0, 0, 0, 0.7);
+}
+
+/* 🔹 Fade In */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.6s ease-in-out;
 }

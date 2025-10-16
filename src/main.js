@@ -1,24 +1,32 @@
 // --- API Constants ---
-const COINLORE_API_URL = 'https://api.coinlore.net/api/tickers/?start=0&limit=100';
+const COINLORE_API_URL = 'https://api.coinlore.net/api/tickers/?start=0&limit=100'; // Top 100 coins
+const COINLORE_GLOBAL_URL = 'https://api.coinlore.net/api/global/';
 const MAX_RETRIES = 5;
-const BASE_DELAY_MS = 500; // 0.5 seconds
+const BASE_DELAY_MS = 500;
 const AUTO_REFRESH_INTERVAL = 60000; // 1 minute
 
 // --- Global State ---
 let allCoins = [];
 let visibleCoins = [];
-let currentView = 'table';
+let currentView = localStorage.getItem('viewMode') || 'table';
+let currentPage = 1;
+const ITEMS_PER_PAGE = 15;
 let searchTimeout;
+let autoRefreshIntervalId = null;
 
 // --- Utility Functions ---
+
+/** Pauses execution for a specified duration. */
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+/** Formats a value as a US dollar currency string. */
 const formatCurrency = (value) => {
   const num = parseFloat(value);
-  if (isNaN(num)) return 'N/A';
+  if (isNaN(num) || num === 0) return '$0.00';
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
 };
 
+/** Formats large numbers with suffixes (K, M, B, T). */
 const formatLargeNumber = (value) => {
   const num = parseFloat(value);
   if (isNaN(num)) return 'N/A';
@@ -32,98 +40,316 @@ const formatLargeNumber = (value) => {
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(tempNum) + suffixes[suffixNum];
 };
 
-const showMessage = (message, type) => {
+/** Displays a message in the message area. */
+const showMessage = (message, type = 'info') => {
   const messageArea = document.getElementById('message-area');
   messageArea.textContent = message;
-  messageArea.className = 'text-center p-3 mb-4 rounded-xl text-sm transition duration-300';
-  messageArea.classList.remove('hidden', 'bg-red-100', 'text-red-700', 'bg-blue-100', 'text-blue-700');
+
+  let baseClasses = 'text-center p-3 mb-4 rounded-xl text-sm font-medium transition duration-300';
   if (type === 'error') {
-    messageArea.classList.add('bg-red-100', 'text-red-700');
-  } else {
-    messageArea.classList.add('bg-blue-100', 'text-blue-700');
+    messageArea.className = baseClasses + ' bg-red-100 text-red-700 shadow-lg border border-red-200';
+    messageArea.classList.remove('hidden');
+  } else if (type === 'loading') {
+    messageArea.className = baseClasses + ' bg-blue-100 text-blue-700 shadow-lg border border-blue-200';
+    messageArea.classList.remove('hidden');
+  } else if (type === 'success') {
+    messageArea.className = baseClasses + ' bg-green-100 text-green-700 shadow-lg border border-green-200';
+    messageArea.classList.remove('hidden');
+    setTimeout(() => messageArea.classList.add('hidden'), 5000); // Hide after 5 seconds
+  } else { // info
+    messageArea.className = baseClasses + ' bg-gray-100 text-gray-700 shadow-lg border border-gray-200';
+    messageArea.classList.remove('hidden');
   }
-  messageArea.style.display = 'block';
 };
 
-// --- Rendering Functions ---
-const renderTable = (coins) => {
-  const tableBody = document.getElementById('crypto-table-body');
-  if (coins.length === 0) {
-    tableBody.innerHTML = `<tr><td colspan="6" class="text-center py-8 text-gray-500">No matching cryptocurrencies found.</td></tr>`;
-    document.getElementById('card-container').innerHTML = '';
-    return;
-  }
-
-  tableBody.innerHTML = coins.map((crypto) => {
-    const changeValue = parseFloat(crypto.percent_change_24h);
-    const changeClass = changeValue > 0 ? 'text-green-600' : changeValue < 0 ? 'text-red-600' : 'text-gray-500';
-    return `
-      <tr id="row-${crypto.id}" class="hover:bg-indigo-50 cursor-pointer transition duration-150" onclick="showCoinDetail('${crypto.id}')">
-        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${crypto.rank}</td>
-        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${crypto.name}</td>
-        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${crypto.symbol}</td>
-        <td id="price-${crypto.id}" class="px-6 py-4 whitespace-nowrap text-sm text-right font-semibold text-gray-900">${formatCurrency(crypto.price_usd)}</td>
-        <td class="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-500">${formatLargeNumber(crypto.market_cap_usd)}</td>
-        <td class="px-6 py-4 whitespace-nowrap text-sm text-right ${changeClass}">${changeValue.toFixed(2)}%</td>
-      </tr>
-    `;
-  }).join('');
-
-  renderCards(coins);
-};
-
-const renderCards = (coins) => {
-  const cardContainer = document.getElementById('card-container');
-  cardContainer.innerHTML = coins.map((crypto) => {
-    const changeValue = parseFloat(crypto.percent_change_24h);
-    const changeClass = changeValue > 0 ? 'text-green-600' : changeValue < 0 ? 'text-red-600' : 'text-gray-500';
-    return `
-      <div class="max-w-xs bg-white rounded-xl overflow-hidden shadow-md hover:shadow-lg transform hover:scale-105 transition duration-300 m-2 cursor-pointer border border-gray-100"
-           onclick="showCoinDetail('${crypto.id}')">
-        <div class="p-6 flex flex-col justify-between h-full">
-          <div>
-            <div class="flex justify-between items-center mb-3">
-              <h2 class="font-bold text-lg text-gray-800">${crypto.name}</h2>
-              <span class="text-sm text-gray-400">${crypto.symbol}</span>
-            </div>
-            <p class="text-sm text-gray-500 mb-2">Rank: <span class="font-semibold">${crypto.rank}</span></p>
-            <p class="text-sm text-gray-700 mb-2">Price: <span class="font-semibold">${formatCurrency(crypto.price_usd)}</span></p>
-            <p class="text-sm text-gray-700 mb-2">Market Cap: <span class="font-semibold">${formatLargeNumber(crypto.market_cap_usd)}</span></p>
-            <p class="text-sm ${changeClass} font-semibold">24h: ${changeValue.toFixed(2)}%</p>
-          </div>
-          <button class="mt-4 w-full bg-indigo-600 text-white text-sm font-semibold py-2 px-3 rounded hover:bg-indigo-700 transition">View Details</button>
-        </div>
-      </div>
-    `;
-  }).join('');
-};
-
-// --- Data Fetching ---
-const fetchAssets = async (attempt = 0) => {
-  showMessage(`Loading top 100 cryptocurrencies (Attempt ${attempt + 1}/${MAX_RETRIES})...`, 'info');
-  try {
-    const response = await fetch(COINLORE_API_URL);
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-
-    const result = await response.json();
-    allCoins = result.data;
-    visibleCoins = allCoins.slice(0, 100);
-    renderTable(visibleCoins);
-    document.getElementById('message-area').style.display = 'none';
-  } catch (error) {
-    console.error(`Error fetching data on attempt ${attempt + 1}:`, error);
-    if (attempt < MAX_RETRIES - 1) {
-      const delay = BASE_DELAY_MS * Math.pow(2, attempt);
+/**
+ * Tries to fetch data from a given URL with exponential backoff.
+ * @param {string} url - The API endpoint URL.
+ * @returns {Promise<Object>} The response data.
+ */
+const fetchDataWithRetry = async (url) => {
+  for (let i = 0; i < MAX_RETRIES; i++) {
+    try {
+      const response = await axios.get(url);
+      return response.data;
+    } catch (error) {
+      if (i === MAX_RETRIES - 1) {
+        console.error(`Fetch failed after ${MAX_RETRIES} retries for URL: ${url}`, error);
+        throw new Error('Failed to fetch data after multiple retries.');
+      }
+      const delay = BASE_DELAY_MS * Math.pow(2, i);
+      console.warn(`Attempt ${i + 1} failed. Retrying in ${delay}ms...`);
       await sleep(delay);
-      await fetchAssets(attempt + 1); // ✅ FIXED: awaited recursive call
-    } else {
-      showMessage(`Failed to load data after ${MAX_RETRIES} attempts. Error: ${error.message}. Please refresh.`, 'error');
     }
   }
 };
 
-// --- Modal Functions ---
-const showCoinDetail = (coinId) => {
+// --- Data Fetching and Rendering ---
+
+/** Fetches coin and global data and updates the state. */
+const fetchCoinData = async (isRefresh = false) => {
+  try {
+    if (!isRefresh) {
+      showMessage('Fetching initial market data...', 'loading');
+    }
+
+    // Fetch both data sets concurrently
+    const [coinData, globalData] = await Promise.all([
+      fetchDataWithRetry(COINLORE_API_URL),
+      fetchDataWithRetry(COINLORE_GLOBAL_URL)
+    ]);
+
+    const oldPrices = allCoins.reduce((acc, coin) => {
+      acc[coin.id] = parseFloat(coin.price_usd);
+      return acc;
+    }, {});
+
+    allCoins = coinData.data || [];
+    renderGlobalStats(globalData.data ? globalData.data[0] : {});
+
+    // Re-render the visible list
+    updateVisibleCoins(oldPrices);
+
+    if (!isRefresh) {
+      showMessage('Market data loaded successfully.', 'success');
+    }
+    feather.replace(); // Replace icon placeholders
+  } catch (error) {
+    showMessage('Error fetching market data. Please check the console for details.', 'error');
+    console.error('API Fetch Error:', error);
+  }
+};
+
+/** Renders the global market data. */
+const renderGlobalStats = (data) => {
+  const stats = [{
+    label: 'Active Coins',
+    value: data.coins_count,
+    icon: 'trending-up'
+  }, {
+    label: 'Total Market Cap',
+    value: formatCurrency(data.total_mcap),
+    icon: 'dollar-sign'
+  }, {
+    label: '24h Volume',
+    value: formatCurrency(data.total_volume),
+    icon: 'bar-chart-2'
+  }, {
+    label: 'BTC Dominance',
+    value: `${parseFloat(data.btc_d).toFixed(2)}%`,
+    icon: 'percent'
+  }];
+
+  const globalStatsEl = document.getElementById('global-stats');
+  globalStatsEl.innerHTML = stats.map(stat => `
+        <div class="bg-white p-5 rounded-xl shadow-lg flex items-center space-x-4 border border-gray-100">
+          <div class="p-3 rounded-full bg-indigo-100 text-indigo-600">
+            <i data-feather="${stat.icon}" class="w-6 h-6"></i>
+          </div>
+          <div>
+            <p class="text-sm font-medium text-gray-500">${stat.label}</p>
+            <p class="text-xl font-bold text-gray-800">${stat.value || 'N/A'}</p>
+          </div>
+        </div>
+      `).join('');
+};
+
+/** Filters and paginates the full coin list. */
+const updateVisibleCoins = (oldPrices = {}) => {
+  // 1. Apply Search Filter
+  const query = document.getElementById('search-input').value.toLowerCase().trim();
+  const filteredCoins = allCoins.filter(coin =>
+    coin.name.toLowerCase().includes(query) ||
+    coin.symbol.toLowerCase().includes(query)
+  );
+
+  // 2. Client-Side Pagination
+  const totalItems = filteredCoins.length;
+  const totalPages = Math.ceil(totalItems / ITEMS_PER_PAGE);
+
+  // Adjust current page if it's out of bounds after filtering
+  if (currentPage > totalPages && totalPages > 0) {
+    currentPage = totalPages;
+  } else if (currentPage < 1) {
+    currentPage = 1;
+  }
+
+  const start = (currentPage - 1) * ITEMS_PER_PAGE;
+  const end = start + ITEMS_PER_PAGE;
+  visibleCoins = filteredCoins.slice(start, end);
+
+  renderCoins(visibleCoins, oldPrices);
+  updatePaginationControls(totalPages, totalItems);
+};
+
+/** Renders the coins based on the current view mode. */
+const renderCoins = (coins, oldPrices) => {
+  const listContainer = document.getElementById('crypto-list');
+  if (coins.length === 0) {
+    listContainer.innerHTML = '<p class="text-center text-gray-500 p-8">No cryptocurrencies match your search criteria.</p>';
+    return;
+  }
+
+  if (currentView === 'table') {
+    renderTable(coins, oldPrices, listContainer);
+  } else {
+    renderCards(coins, oldPrices, listContainer);
+  }
+};
+
+/** Renders the data in a responsive table. */
+const renderTable = (coins, oldPrices, container) => {
+  container.innerHTML = `
+        <table class="min-w-full divide-y divide-gray-200">
+          <thead>
+            <tr class="bg-gray-50 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              <th class="px-6 py-3 rounded-tl-xl">Rank</th>
+              <th class="px-6 py-3">Name</th>
+              <th class="px-6 py-3">Symbol</th>
+              <th class="px-6 py-3">Price (USD)</th>
+              <th class="px-6 py-3">24h Change (%)</th>
+              <th class="px-6 py-3 rounded-tr-xl">Market Cap</th>
+            </tr>
+          </thead>
+          <tbody id="crypto-table-body" class="bg-white divide-y divide-gray-100">
+            ${coins.map(coin => {
+    const priceClass = getPriceChangeClass(coin.price_usd, oldPrices[coin.id]);
+    const changeClass = parseFloat(coin.percent_change_24h) >= 0 ? 'text-green-600' : 'text-red-600';
+    return `
+                <tr class="hover:bg-gray-50 cursor-pointer transition duration-150" onclick="showCoinDetails('${coin.id}')">
+                  <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${coin.rank}</td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold text-gray-800">${coin.name}</td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${coin.symbol}</td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 ${priceClass}">${formatCurrency(coin.price_usd)}</td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm font-medium ${changeClass}">${parseFloat(coin.percent_change_24h).toFixed(2)}%</td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatLargeNumber(coin.market_cap_usd)}</td>
+                </tr>
+              `;
+  }).join('')}
+          </tbody>
+        </table>
+      `;
+};
+
+/** Renders the data in a card/grid view. */
+const renderCards = (coins, oldPrices, container) => {
+  container.innerHTML = `
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 p-4">
+          ${coins.map(coin => {
+    const priceClass = getPriceChangeClass(coin.price_usd, oldPrices[coin.id]);
+    const changeClass = parseFloat(coin.percent_change_24h) >= 0 ? 'text-green-600' : 'text-red-600';
+    const changeIcon = parseFloat(coin.percent_change_24h) >= 0 ? 'arrow-up-right' : 'arrow-down-right';
+    return `
+              <div class="bg-white p-6 rounded-2xl shadow-xl border border-gray-100 card-glow cursor-pointer" onclick="showCoinDetails('${coin.id}')">
+                <div class="flex justify-between items-start mb-3">
+                  <h4 class="text-xl font-extrabold text-gray-900">${coin.name} (${coin.symbol})</h4>
+                  <span class="text-xs font-bold px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full">#${coin.rank}</span>
+                </div>
+                
+                <p class="text-3xl font-bold text-gray-800 my-2 ${priceClass}">${formatCurrency(coin.price_usd)}</p>
+
+                <div class="flex justify-between items-center text-sm mt-4 pt-4 border-t border-gray-100">
+                  <div class="flex items-center space-x-1 ${changeClass} font-semibold">
+                    <i data-feather="${changeIcon}" class="w-4 h-4"></i>
+                    <span>${parseFloat(coin.percent_change_24h).toFixed(2)}% (24h)</span>
+                  </div>
+                  <div class="text-right">
+                    <p class="text-xs text-gray-500">M. Cap</p>
+                    <p class="font-medium text-sm">${formatLargeNumber(coin.market_cap_usd)}</p>
+                  </div>
+                </div>
+              </div>
+            `;
+  }).join('')}
+        </div>
+      `;
+};
+
+/** Determines the price animation class. */
+const getPriceChangeClass = (newPriceStr, oldPrice) => {
+  if (!oldPrice || isNaN(oldPrice)) return '';
+  const newPrice = parseFloat(newPriceStr);
+  if (newPrice > oldPrice) {
+    return 'animate-price-up';
+  } else if (newPrice < oldPrice) {
+    return 'animate-price-down';
+  }
+  return '';
+};
+
+/** Updates the pagination buttons and indicator. */
+const updatePaginationControls = (totalPages, totalItems) => {
+  const prevButton = document.getElementById('prev-button');
+  const nextButton = document.getElementById('next-button');
+  const pageIndicator = document.getElementById('page-indicator');
+
+  prevButton.disabled = currentPage === 1;
+  nextButton.disabled = currentPage >= totalPages || totalItems === 0;
+
+  if (totalItems === 0) {
+    pageIndicator.textContent = 'No results';
+  } else {
+    pageIndicator.textContent = `Page ${currentPage} of ${totalPages}`;
+  }
+};
+
+// --- Interaction Handlers ---
+
+/** Toggles between table and card view. */
+const toggleView = (view) => {
+  currentView = view;
+  localStorage.setItem('viewMode', view);
+
+  const tableBtn = document.getElementById('view-table');
+  const cardsBtn = document.getElementById('view-cards');
+
+  // Update button styles
+  [tableBtn, cardsBtn].forEach(btn => {
+    btn.classList.remove('bg-white', 'text-indigo-600', 'shadow-md');
+    btn.classList.add('text-gray-700', 'hover:bg-gray-300', 'font-medium');
+  });
+
+  if (view === 'table') {
+    tableBtn.classList.add('bg-white', 'text-indigo-600', 'shadow-md', 'font-semibold');
+    tableBtn.classList.remove('font-medium', 'hover:bg-gray-300');
+  } else {
+    cardsBtn.classList.add('bg-white', 'text-indigo-600', 'shadow-md', 'font-semibold');
+    cardsBtn.classList.remove('font-medium', 'hover:bg-gray-300');
+  }
+
+  // Re-render
+  renderCoins(visibleCoins);
+  feather.replace();
+};
+
+/** Handles the search input with debounce. */
+const handleSearch = () => {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => {
+    currentPage = 1; // Reset to first page on new search
+    updateVisibleCoins();
+    feather.replace();
+  }, 300); // Debounce for 300ms
+};
+
+/** Event handler for the Previous button. */
+const goToPreviousPage = () => {
+  if (currentPage > 1) {
+    currentPage--;
+    updateVisibleCoins();
+    feather.replace();
+  }
+};
+
+/** Event handler for the Next button. */
+const goToNextPage = () => {
+  currentPage++;
+  updateVisibleCoins();
+  feather.replace();
+};
+
+/** Displays the modal with coin details. */
+const showCoinDetails = (coinId) => {
   const coin = allCoins.find(c => c.id === coinId);
   if (!coin) return;
 
@@ -131,77 +357,80 @@ const showCoinDetail = (coinId) => {
   document.getElementById('modal-coin-rank').textContent = coin.rank;
   document.getElementById('modal-coin-price').textContent = formatCurrency(coin.price_usd);
   document.getElementById('modal-coin-marketcap').textContent = formatLargeNumber(coin.market_cap_usd);
-  document.getElementById('modal-coin-supply').textContent = formatLargeNumber(coin.circulating_supply);
+  document.getElementById('modal-coin-supply').textContent = formatLargeNumber(coin.tsupply);
 
-  const changeValue = parseFloat(coin.percent_change_24h);
   const changeEl = document.getElementById('modal-coin-change');
-  changeEl.textContent = `${changeValue.toFixed(2)}%`;
-  changeEl.className = changeValue > 0 ? 'text-green-600' : changeValue < 0 ? 'text-red-600' : 'text-gray-600';
+  const change7dEl = document.getElementById('modal-coin-7d');
 
-  const modalOverlay = document.getElementById('detail-modal-overlay');
-  const modal = document.getElementById('detail-modal');
+  const change24h = parseFloat(coin.percent_change_24h).toFixed(2);
+  const change7d = parseFloat(coin.percent_change_7d).toFixed(2);
 
-  modalOverlay.classList.remove('opacity-0', 'pointer-events-none');
-  modalOverlay.classList.add('opacity-100');
-  modal.classList.remove('scale-95');
-  modal.classList.add('scale-100');
+  // 24h Change Styling
+  changeEl.textContent = `${change24h}%`;
+  changeEl.className = `text-xl font-bold mt-1 ${change24h >= 0 ? 'text-green-600' : 'text-red-600'}`;
+
+  // 7d Change Styling
+  change7dEl.textContent = `${change7d}%`;
+  change7dEl.className = `font-semibold ${change7d >= 0 ? 'text-green-600' : 'text-red-600'}`;
+
+
+  const modal = document.getElementById('coin-detail-modal');
+  modal.classList.remove('hidden');
+  document.getElementById('modal-container').classList.remove('scale-95');
+  document.getElementById('modal-container').classList.add('scale-100');
 };
 
-const hideCoinDetail = () => {
-  const modalOverlay = document.getElementById('detail-modal-overlay');
-  const modal = document.getElementById('detail-modal');
+/** Closes the modal. */
+const closeModal = (event) => {
+  if (event && event.target.id !== 'coin-detail-modal') return; // Prevent closing if clicking inside the modal content
 
-  modalOverlay.classList.remove('opacity-100');
-  modalOverlay.classList.add('opacity-0');
-  modal.classList.remove('scale-100');
-  modal.classList.add('scale-95');
+  const modal = document.getElementById('coin-detail-modal');
+  document.getElementById('modal-container').classList.add('scale-95');
+  document.getElementById('modal-container').classList.remove('scale-100');
 
-  // Smooth close delay
-  setTimeout(() => modalOverlay.classList.add('pointer-events-none'), 200);
+  setTimeout(() => {
+    modal.classList.add('hidden');
+  }, 300); // Delay hiding to match transition
 };
 
-// --- Search Function (with debounce) ---
-const handleSearch = (event) => {
-  clearTimeout(searchTimeout);
-  searchTimeout = setTimeout(() => {
-    const query = event.target.value.toLowerCase();
-    visibleCoins = allCoins.filter(
-      (coin) => coin.name.toLowerCase().includes(query) || coin.symbol.toLowerCase().includes(query)
-    );
-    renderTable(visibleCoins);
-  }, 300);
-};
-
-// --- View Toggle ---
-const toggleView = () => {
-  const tableContainer = document.getElementById('table-container');
-  const cardContainer = document.getElementById('card-container');
-  const toggleButton = document.getElementById('toggle-view-button');
-
-  if (currentView === 'table') {
-    tableContainer.classList.add('hidden');
-    cardContainer.classList.remove('hidden');
-    toggleButton.textContent = 'Switch to Table View';
-    currentView = 'card';
-  } else {
-    tableContainer.classList.remove('hidden');
-    cardContainer.classList.add('hidden');
-    toggleButton.textContent = 'Switch to Card View';
-    currentView = 'table';
+/** Starts the auto-refresh loop. */
+const startAutoRefresh = () => {
+  if (autoRefreshIntervalId) {
+    clearInterval(autoRefreshIntervalId);
   }
+  autoRefreshIntervalId = setInterval(() => {
+    console.log('Auto-refreshing data...');
+    fetchCoinData(true);
+  }, AUTO_REFRESH_INTERVAL);
 };
 
-// --- Initialization ---
-document.addEventListener('DOMContentLoaded', () => {
+/** Initializes the application. */
+const initializeApp = () => {
+  // 1. Initial data fetch
+  fetchCoinData();
+
+  // 2. Set up event listeners
+  document.getElementById('prev-button').addEventListener('click', goToPreviousPage);
+  document.getElementById('next-button').addEventListener('click', goToNextPage);
   document.getElementById('search-input').addEventListener('input', handleSearch);
-  document.getElementById('close-modal-btn').addEventListener('click', hideCoinDetail);
-  document.getElementById('detail-modal-overlay').addEventListener('click', (e) => {
-    if (e.target.id === 'detail-modal-overlay') hideCoinDetail();
-  });
-  document.getElementById('toggle-view-button').addEventListener('click', toggleView);
-  fetchAssets();
-  setInterval(fetchAssets, AUTO_REFRESH_INTERVAL); // Auto-refresh ✅
-});
+
+  // 3. Set initial view
+  toggleView(currentView);
+
+  // 4. Start auto-refresh
+  startAutoRefresh();
+};
+
+// Make functions globally accessible for inline HTML calls (onclick/onkeyup)
+window.handleSearch = handleSearch;
+window.goToPreviousPage = goToPreviousPage;
+window.goToNextPage = goToNextPage;
+window.toggleView = toggleView;
+window.showCoinDetails = showCoinDetails;
+window.closeModal = closeModal;
+
+// Initialize listeners and fetch the first page
+document.addEventListener('DOMContentLoaded', initializeApp);
 
 // import axios from 'axios';
 
